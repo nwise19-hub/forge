@@ -239,6 +239,7 @@ h2.sec:first-child{margin-top:6px}
 <div id="app"></div>
 <nav id="tabs"></nav>
 <script>
+window.FORGE_BUILD = "2026.09.02.1640";
 window.EXERCISES = [
 // --- Chest ---
 { id:"barbell-bench-press", name:"Barbell Bench Press", muscle:"Chest", secondary:["Triceps","Shoulders"], equipment:"Barbell", type:"weight", cue:"A strength lift more than a chest builder — the bar stops on your ribs, short of where the pec is loaded hardest. Retract and depress the shoulder blades, elbows at 45 to 60 degrees." },
@@ -1446,6 +1447,7 @@ function defaults() {
     health: {},
     sync: { token: '', gistId: '', auto: true, lastSync: 0, lastCount: 0, err: '', status: '', statusKind: '' },
     backup: { lastExport: 0 },
+    appBuild: '',
     lastTab: 'today'
   };
 }
@@ -3697,7 +3699,12 @@ VIEW.more = function () {
     '<div class="stat"><div class="k">Food days</div><div class="v">' + Object.keys(S.foodLog).length + '</div></div>' +
     '<div class="stat"><div class="k">Weigh-ins</div><div class="v">' + S.weights.length + '</div></div></div>' +
     (_canStore ? '' : '<div class="xs" style="color:var(--bad);margin-top:12px">Heads up: this browser is blocking local storage, so data will not survive a reload. Add Forge to your Home Screen and open it from there.</div>') +
-    '<button class="btn blk dan sml" style="margin-top:12px" data-act="resetAll">Erase everything</button></div>';
+    '<button class="btn blk dan sml" style="margin-top:12px" data-act="resetAll">Erase everything</button></div>' +
+    '<div class="list" style="margin-top:10px"><div class="li" data-act="restorePoints">' +
+    '<div class="ico" style="color:var(--ok)">' + ic('shield') + '</div>' +
+    '<div class="grow"><div class="b sm">Restore points</div>' +
+    '<div class="xs mut2">' + (loadSnaps().length || 'None') + ' saved \u2014 taken automatically on every update</div></div>' +
+    '<div class="chev">' + ic('right') + '</div></div></div>';
 
   h += '<h2 class="sec">Shortcuts</h2><div class="list">' +
     '<div class="li" data-act="manageHabits"><div class="ico">' + ic('target') + '</div><div class="grow b sm">Habits</div><div class="chev">' + ic('right') + '</div></div>' +
@@ -3848,6 +3855,7 @@ ACT.about = function () {
       '<div class="li"><div class="grow sm">Prebuilt programs</div><div class="b sm tnum">' + window.PROGRAMS.length + '</div></div>' +
       '<div class="li"><div class="grow sm">Foods in the database</div><div class="b sm tnum">' + window.FOODS.length.toLocaleString() + '</div></div>' +
       '<div class="li"><div class="grow sm">Online food lookup</div><div class="b sm">Open Food Facts</div></div>' +
+      '<div class="li"><div class="grow sm">Build</div><div class="b sm tnum">' + esc(BUILD) + '</div></div>' +
       '</div>' +
       '<h2 class="sec">Add to your Home Screen</h2>' +
       '<p class="sm mut">In Safari, tap the Share button, then <b>Add to Home Screen</b>. Forge then opens full-screen with its own icon and works with no signal.</p>' +
@@ -4452,6 +4460,114 @@ ACT.newFoodForBarcode = function (d) {
 };
 
 ;
+/* ============================ FORGE — safety net ============================ */
+/* Automatic restore points. Before a new build of the app is allowed to touch
+   anything, the previous state is copied aside. Losing history to an update
+   should be structurally impossible, not merely unlikely. */
+
+var BUILD = window.FORGE_BUILD || 'dev';
+var SNAPKEY = 'forge.snaps.v1';
+var MAX_SNAPS = 4;
+
+function loadSnaps() {
+  try { return JSON.parse((_canStore ? localStorage.getItem(SNAPKEY) : null) || '[]'); }
+  catch (e) { return []; }
+}
+function writeSnaps(list) {
+  if (!_canStore) return false;
+  for (var i = 0; i < 3; i++) {
+    try { localStorage.setItem(SNAPKEY, JSON.stringify(list)); return true; }
+    catch (e) { if (!list.length) return false; list.shift(); }   /* full: drop oldest, retry */
+  }
+  return false;
+}
+function hasRealData() {
+  return S.workouts.length > 0 || Object.keys(S.foodLog).length > 0 || S.weights.length > 1;
+}
+function snapCounts() {
+  return { workouts: S.workouts.length, foodDays: Object.keys(S.foodLog).length,
+           weights: S.weights.length, plans: S.plans.length };
+}
+function takeSnapshot(reason) {
+  if (!_canStore || !hasRealData()) return false;
+  var list = loadSnaps(), payload = JSON.stringify(snapshot(S));
+  var last = list[list.length - 1];
+  if (last && last.data === payload) return true;           /* nothing has changed */
+  list.push({ at: Date.now(), build: BUILD, reason: reason || 'update',
+              counts: snapCounts(), data: payload });
+  while (list.length > MAX_SNAPS) list.shift();
+  return writeSnaps(list);
+}
+function restoreSnapshot(i) {
+  var list = loadSnaps(), s = list[i];
+  if (!s) return false;
+  var obj;
+  try { obj = JSON.parse(s.data); } catch (e) { return false; }
+  if (!obj || typeof obj !== 'object') return false;
+  takeSnapshot('before restore');                            /* the undo for the undo */
+  applySnapshot(obj);
+  saveNow();
+  return true;
+}
+
+/* Runs at boot, before the UI renders or sync can push anything. */
+function versionGuard() {
+  if (S.appBuild === BUILD) return;
+  if (S.appBuild) takeSnapshot('updated to ' + BUILD);       /* skip on first install */
+  S.appBuild = BUILD;
+  saveNow();
+}
+
+/* ---------- UI ---------- */
+function snapWhen(at) {
+  var d = new Date(at), h = d.getHours(), m = pad(d.getMinutes());
+  var ampm = h >= 12 ? 'pm' : 'am'; h = h % 12 || 12;
+  return niceDate(dkey(d)) + ' at ' + h + ':' + m + ampm;
+}
+ACT.restorePoints = function () {
+  var list = loadSnaps();
+  var body = '<p class="sm mut" style="margin:0 0 14px">Forge copies your data aside automatically every time the app updates, and keeps the last ' +
+    MAX_SNAPS + '. If an update ever looked wrong, roll back here — nothing is lost in the meantime, because rolling back saves a restore point too.</p>';
+  if (!list.length) {
+    body += '<div class="card"><div class="sm mut center" style="padding:8px 0">No restore points yet. One is created the first time you take an update with data logged.</div></div>';
+  } else {
+    body += '<div class="list">';
+    list.slice().reverse().forEach(function (s, ri) {
+      var i = list.length - 1 - ri, c = s.counts || {};
+      body += '<div class="li"><div class="ico">' + ic('shield') + '</div>' +
+        '<div class="grow"><div class="b sm">' + esc(snapWhen(s.at)) + '</div>' +
+        '<div class="xs mut2">' + (c.workouts || 0) + ' workouts · ' + (c.foodDays || 0) + ' food days · ' +
+        (c.weights || 0) + ' weigh-ins</div>' +
+        '<div class="xs mut2" style="margin-top:2px">' + esc(s.reason || '') + '</div></div>' +
+        '<button class="btn sml" data-act="doRestoreSnap" data-i="' + i + '">Restore</button></div>';
+    });
+    body += '</div>';
+  }
+  body += '<div class="spacer"></div><button class="btn blk sml" data-act="snapNow">' + ic('shield') + 'Save a restore point now</button>';
+  sheet({ title: 'Restore points', body: body });
+};
+ACT.snapNow = function () {
+  if (!hasRealData()) { toast('Nothing logged yet to save'); return; }
+  if (takeSnapshot('saved by you')) { closeSheet(); toast('Restore point saved'); render(); }
+  else toast('Could not save — storage may be full');
+};
+ACT.doRestoreSnap = function (d) {
+  var list = loadSnaps(), s = list[+d.i];
+  if (!s) return;
+  var c = s.counts || {};
+  closeSheet();
+  setTimeout(function () {
+    confirmSheet('Roll back to ' + snapWhen(s.at) + '?',
+      'Your current data will be saved as a new restore point first, so this is reversible. You would go back to ' +
+      (c.workouts || 0) + ' workouts and ' + (c.foodDays || 0) + ' days of food.',
+      'Roll back', function () {
+        if (restoreSnapshot(+d.i)) { go('today'); toast('Rolled back'); }
+        else toast('That restore point could not be read');
+      });
+  }, 240);
+};
+
+;
 /* ============================ FORGE — boot ============================ */
 
 function afterRender() {
@@ -4554,6 +4670,7 @@ if (!window.FORGE_NO_SW && 'serviceWorker' in navigator && window.isSecureContex
 }
 
 /* ---------- start ---------- */
+versionGuard();          /* snapshot before a new build touches anything */
 mountTabs();
 render();
 if (isFresh()) setTimeout(onboarding, 320);
