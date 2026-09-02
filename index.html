@@ -239,7 +239,7 @@ h2.sec:first-child{margin-top:6px}
 <div id="app"></div>
 <nav id="tabs"></nav>
 <script>
-window.FORGE_BUILD = "2026.09.02.2003";
+window.FORGE_BUILD = "2026.09.02.2011";
 window.EXERCISES = [
 // --- Chest ---
 { id:"barbell-bench-press", name:"Barbell Bench Press", muscle:"Chest", secondary:["Triceps","Shoulders"], equipment:"Barbell", type:"weight", cue:"A strength lift more than a chest builder — the bar stops on your ribs, short of where the pec is loaded hardest. Retract and depress the shoulder blades, elbows at 45 to 60 degrees." },
@@ -2550,12 +2550,40 @@ function normFood(s) {
 }
 /* shorthand people actually type at the counter */
 var FOOD_ALIAS = {
-  qt: 'quiktrip', bww: 'buffalo wild wings', cfa: 'chick fil a', mcd: 'mcdonalds',
-  mcds: 'mcdonalds', bk: 'burger king', sbux: 'starbucks', jj: 'jimmy johns',
-  tr: 'texas roadhouse', og: 'olive garden', pf: 'panda express', caseys: 'casey s'
+  qt: 'quiktrip', quicktrip: 'quiktrip', quicktrips: 'quiktrip', kwiktrip: 'quiktrip',
+  bww: 'buffalo wild wings', bdubs: 'buffalo wild wings',
+  cfa: 'chickfila', mcd: 'mcdonalds', mcds: 'mcdonalds', micky: 'mcdonalds',
+  bk: 'burger king', sbux: 'starbucks', jj: 'jimmy johns',
+  tr: 'texas roadhouse', og: 'olive garden', pf: 'panda express',
+  caseys: 'casey s', case: 'casey s'
 };
+/* whole-phrase fixes, applied before the query is split into words */
+var FOOD_PHRASE = [
+  ['quick trip', 'quiktrip'], ['quik trip', 'quiktrip'], ['kwik trip', 'quiktrip'],
+  ['chick fil a', 'chickfila'], ['chic fil a', 'chickfila'], ['chick fila', 'chickfila'],
+  ['mc donalds', 'mcdonalds'], ['mc donald', 'mcdonalds'],
+  ['caseys general store', 'casey s'], ['casey general store', 'casey s'],
+  ['caseys general', 'casey s'], ['casey general', 'casey s'],
+  ['b dubs', 'buffalo wild wings'], ['panda garden', 'panda express']
+];
 function expandAlias(q) {
+  for (var i = 0; i < FOOD_PHRASE.length; i++) {
+    if (q.indexOf(FOOD_PHRASE[i][0]) >= 0) q = q.split(FOOD_PHRASE[i][0]).join(FOOD_PHRASE[i][1]);
+  }
   return q.split(' ').map(function (w) { return FOOD_ALIAS[w] || w; }).join(' ');
+}
+/* true when a and b are at most one insert/delete/substitution apart */
+function edit1(a, b) {
+  var la = a.length, lb = b.length;
+  if (a === b) return true;
+  if (la - lb > 1 || lb - la > 1) return false;
+  var i = 0, j = 0, d = 0;
+  while (i < la && j < lb) {
+    if (a.charAt(i) === b.charAt(j)) { i++; j++; continue; }
+    if (++d > 1) return false;
+    if (la > lb) i++; else if (lb > la) j++; else { i++; j++; }
+  }
+  return d + (la - i) + (lb - j) <= 1;
 }
 function foodSearch(q, limit) {
   q = expandAlias(normFood(q));
@@ -2563,12 +2591,28 @@ function foodSearch(q, limit) {
   if (!q) return pool.slice(0, limit || 60);
   var words = q.split(/\s+/);
   for (var i = 0; i < pool.length; i++) {
-    var f = pool[i], hay = normFood(f.name + ' ' + (f.brand || '') + ' ' + f.cat);
+    var f = pool[i], hay, hayn, hayw;
+    if (f.custom) {
+      hay = normFood(f.name + ' ' + (f.brand || '') + ' ' + f.cat);
+      hayn = hay.split(' ').join(''); hayw = hay.split(' ');
+    } else {
+      if (!f._h) {
+        f._h = normFood(f.name + ' ' + (f.brand || '') + ' ' + f.cat);
+        f._hn = f._h.split(' ').join(''); f._hw = f._h.split(' ');
+      }
+      hay = f._h; hayn = f._hn; hayw = f._hw;
+    }
     var ok = true, score = 0;
     for (var j = 0; j < words.length; j++) {
-      var p = hay.indexOf(words[j]);
-      if (p < 0) { ok = false; break; }
-      score += p === 0 ? 0 : (p < 12 ? 4 : 12);
+      var w = words[j], p = hay.indexOf(w);
+      if (p >= 0) { score += p === 0 ? 0 : (p < 12 ? 4 : 12); continue; }
+      if (w.length >= 4 && hayn.indexOf(w) >= 0) { score += 8; continue; }  /* spacing-insensitive */
+      var fz = false;
+      if (w.length >= 5) {
+        for (var k = 0; k < hayw.length; k++) { if (edit1(hayw[k], w)) { fz = true; break; } }
+      }
+      if (fz) { score += 14; continue; }                                     /* one typo away */
+      ok = false; break;
     }
     if (!ok) continue;
     if (normFood(f.name).indexOf(q) === 0) score -= 25;
@@ -2578,9 +2622,25 @@ function foodSearch(q, limit) {
     score += f.name.length * 0.05;
     out.push({ f: f, s: score });
   }
-  out.sort(function (a, b) { return a.s - b.s; });
+  /* browsing one place: alphabetical reads better than match score */
+  if (out.length > 1 && out.every(function (o) { return normFood(o.f.brand) === q; })) {
+    out.sort(function (a, b) { return a.f.name < b.f.name ? -1 : (a.f.name > b.f.name ? 1 : 0); });
+  } else {
+    out.sort(function (a, b) { return a.s - b.s; });
+  }
   return out.slice(0, limit || 60).map(function (o) { return o.f; });
 }
+/* brands present in the database, most items first - powers the browse list */
+function foodBrands() {
+  var map = {}, pool = allFoods(), i;
+  for (i = 0; i < pool.length; i++) {
+    var b = pool[i].brand;
+    if (b) map[b] = (map[b] || 0) + 1;
+  }
+  return Object.keys(map).map(function (b) { return { brand: b, n: map[b] }; })
+    .sort(function (a, b) { return b.n - a.n || (a.brand < b.brand ? -1 : 1); });
+}
+
 
 /* ---------- Open Food Facts ---------- */
 var OFF_URLS = [
@@ -3709,6 +3769,27 @@ function runOnline() {
     drawResults();
   });
 }
+/* With no query, show what's actually in the database by place, so new
+   items are findable without guessing the exact brand spelling. */
+function brandBrowser() {
+  var bs = foodBrands(), h = '';
+  h += '<div class="xs mut2" style="margin:2px 0 10px">' + allFoods().length +
+       ' foods. Search, scan a barcode, or pick a place.</div>';
+  h += '<div class="list">';
+  bs.forEach(function (b) {
+    h += '<div class="li" data-act="fBrand" data-v="' + esc(b.brand) + '">' +
+      '<div class="grow"><div class="b sm trunc">' + esc(b.brand) + '</div></div>' +
+      '<div class="xs mut2 tnum" style="margin-right:8px">' + b.n + '</div>' +
+      '<div class="chev">' + ic('right') + '</div></div>';
+  });
+  return h + '</div>';
+}
+ACT.fBrand = function (d) {
+  fState.q = d.v;
+  var i = $('#fq');
+  if (i) { i.value = d.v; }
+  drawResults();
+};
 function drawResults() {
   var host = $('#fres'); if (!host) return;
   var list = [], note = '';
@@ -3730,6 +3811,7 @@ function drawResults() {
     list = S.recipes.map(recipeAsFood);
     note = list.length ? '' : 'Build a recipe once, log it in one tap forever.';
   } else {
+    if (!fState.q) { host.innerHTML = brandBrowser(); return; }
     list = foodSearch(fState.q, 80);
   }
   if (fState.q && fState.tab !== 'all' && fState.tab !== 'online') {
