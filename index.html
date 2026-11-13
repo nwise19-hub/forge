@@ -284,6 +284,13 @@ h2.sec:first-child{margin-top:6px}
 @keyframes fi{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
 /* ---------- new: quick actions, hero ---------- */
+.nutcard .nrow{padding:9px 0;border-top:1px solid var(--line)}
+.nutcard .nrow:first-of-type{border-top:0}
+details.more{margin-top:4px;border-top:1px solid var(--line);padding-top:12px}
+details.more summary{list-style:none;cursor:pointer;font-weight:700;font-size:14px;color:var(--acc);padding:2px 0 10px}
+details.more summary::-webkit-details-marker{display:none}
+details.more summary::before{content:"+ ";font-weight:800}
+details.more[open] summary::before{content:"\2212  "}
 .qa{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}
 .qa button{display:flex;flex-direction:column;align-items:center;gap:6px;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:12px 4px 10px;font-size:12px;font-weight:650;color:var(--tx2);box-shadow:var(--shadow);transition:transform .1s}
 .qa button:active{transform:scale(.95)}
@@ -301,7 +308,7 @@ h2.sec:first-child{margin-top:6px}
 <div id="app"></div>
 <nav id="tabs"></nav>
 <script>
-window.FORGE_BUILD = "2026.11.13.1200";
+window.FORGE_BUILD = "2026.11.13.1500";
 window.EXERCISES = [
 // --- Chest ---
 { id:"barbell-bench-press", name:"Barbell Bench Press", muscle:"Chest", secondary:["Triceps","Shoulders"], equipment:"Barbell", type:"weight", cue:"A strength lift more than a chest builder — the bar stops on your ribs, short of where the pec is loaded hardest. Retract and depress the shoulder blades, elbows at 45 to 60 degrees." },
@@ -3369,8 +3376,89 @@ function targets() { return S.settings.autoTargets ? computeTargets() : S.settin
 /* ---------- food ---------- */
 function logFor(k) { return S.foodLog[k] || []; }
 var MEALS = ['Breakfast', 'Lunch', 'Dinner', 'Snacks'];
+/* ---------- extra nutrients (optional; stored per 100 g on foods, scaled on log entries).
+   A missing key means "unknown", never zero. Daily values are the FDA label DVs. */
+var NUTS = [
+  { k: 'na', label: 'Sodium', unit: 'mg', dv: 2300, limit: true },
+  { k: 'sug', label: 'Total sugars', unit: 'g', dv: null },
+  { k: 'asug', label: 'Added sugars', unit: 'g', dv: 50, limit: true },
+  { k: 'sat', label: 'Saturated fat', unit: 'g', dv: 20, limit: true },
+  { k: 'trans', label: 'Trans fat', unit: 'g', dv: null, limit: true },
+  { k: 'chol', label: 'Cholesterol', unit: 'mg', dv: 300, limit: true }
+];
+function nutFmt(v, unit) { return unit === 'mg' ? Math.round(v).toLocaleString() : String(r1(v)); }
+function scaleNuts(f, m) {
+  var o = {};
+  NUTS.forEach(function (n) { if (f && f[n.k] != null && isFinite(f[n.k])) o[n.k] = f[n.k] * m; });
+  return o;
+}
+function setNuts(target, vals) {
+  NUTS.forEach(function (n) {
+    if (!(n.k in vals)) return;
+    if (vals[n.k] == null) delete target[n.k]; else target[n.k] = n.unit === 'mg' ? Math.round(vals[n.k] * 10) / 10 : r1(vals[n.k]);
+  });
+  return target;
+}
+function offNuts(n) {
+  var o = {}, g = function (key) { var v = n[key]; return v == null || v === '' || !isFinite(+v) ? null : +v; };
+  var na = g('sodium_100g'); if (na == null && g('salt_100g') != null) na = g('salt_100g') / 2.5;
+  if (na != null) o.na = na * 1000;
+  if (g('sugars_100g') != null) o.sug = g('sugars_100g');
+  if (g('added-sugars_100g') != null) o.asug = g('added-sugars_100g');
+  if (g('saturated-fat_100g') != null) o.sat = g('saturated-fat_100g');
+  if (g('trans-fat_100g') != null) o.trans = g('trans-fat_100g');
+  if (g('cholesterol_100g') != null) o.chol = g('cholesterol_100g') * 1000;
+  return o;
+}
+/* form section: collapsible inputs, values given per serving */
+function nutFields(pre, vals) {
+  vals = vals || {};
+  var any = NUTS.some(function (n) { return vals[n.k] != null; }), h = '';
+  for (var i = 0; i < NUTS.length; i += 2) {
+    h += '<div class="f2">' + [NUTS[i], NUTS[i + 1]].map(function (n) {
+      return '<div class="fld"><label>' + n.label + ' (' + n.unit + ')</label><input id="' + pre + 'n_' + n.k + '" type="number" inputmode="decimal" placeholder="\u2014" value="' +
+        (vals[n.k] == null ? '' : (n.unit === 'mg' ? Math.round(vals[n.k]) : r1(vals[n.k]))) + '"></div>';
+    }).join('') + '</div>';
+  }
+  return '<details class="more"' + (any ? ' open' : '') + '><summary>More nutrition <span class="mut2">\u00b7 optional</span></summary>' +
+    '<div class="xs mut2" style="margin:2px 0 12px">Copy from the label or the restaurant\'s nutrition info. Leave blank if it isn\'t listed.</div>' + h + '</details>';
+}
+/* read form section; mult converts the per-serving numbers typed in to what gets stored */
+function readNuts(el, pre, mult) {
+  var o = {};
+  NUTS.forEach(function (n) {
+    var i = $('#' + pre + 'n_' + n.k, el); if (!i) return;
+    o[n.k] = i.value === '' ? null : Math.max(0, num(i.value)) * mult;
+  });
+  return o;
+}
+function nutLine(m) {
+  var parts = NUTS.filter(function (n) { return m[n.k] != null; }).map(function (n) { return n.label + ' ' + nutFmt(m[n.k], n.unit) + ' ' + n.unit; });
+  return parts.join(' \u00b7 ');
+}
+function nutCard(k, t) {
+  if (!t.count) return '';
+  var any = NUTS.some(function (n) { return t.x[n.k].n > 0; });
+  var h = '<h2 class="sec">Nutrients</h2><div class="card nutcard"><div class="xs mut2" style="margin-bottom:4px">Daily values from the FDA nutrition label</div>';
+  if (!any) {
+    return h + '<div class="xs mut2" style="padding:4px 0 2px">None of today\'s foods have sodium, sugar or cholesterol listed yet. Scanned barcodes and online results include them, and you can add them to your own foods under More nutrition.</div></div>';
+  }
+  NUTS.forEach(function (n) {
+    var x = t.x[n.k];
+    var val = x.n ? nutFmt(x.v, n.unit) + (n.dv ? '<span class="mut2"> / ' + nutFmt(n.dv, n.unit) + '</span>' : '') + ' ' + n.unit : '<span class="mut2">\u2014</span>';
+    var pct = n.dv && x.n ? x.v / n.dv : null;
+    h += '<div class="nrow"><div class="grow"><div class="row between"><span class="sm">' + n.label + '</span><span class="sm b tnum">' + val + '</span></div>' +
+      (pct != null ? '<div class="macro" style="margin-top:6px"><div class="bar"><i style="width:' + r1(clamp(pct, 0, 1) * 100) + '%;background:' + (pct > 1 ? 'var(--bad)' : (pct > 0.8 ? 'var(--carb)' : 'var(--ok)')) + '"></i></div></div>' : '') +
+      (x.n && x.n < t.count ? '<div class="xs mut2" style="margin-top:3px">from ' + x.n + ' of ' + t.count + ' foods</div>' : '') +
+      '</div></div>';
+  });
+  return h + '</div>';
+}
 function dayTotals(k) {
-  var t = { kcal: 0, p: 0, c: 0, f: 0, fib: 0 }, L = logFor(k);
+  var t = { kcal: 0, p: 0, c: 0, f: 0, fib: 0, count: 0, x: {} }, L = logFor(k);
+  NUTS.forEach(function (n) { t.x[n.k] = { v: 0, n: 0 }; });
+  t.count = L.length;
+  for (var j = 0; j < L.length; j++) NUTS.forEach(function (n) { if (L[j][n.k] != null) { t.x[n.k].v += L[j][n.k]; t.x[n.k].n++; } });
   for (var i = 0; i < L.length; i++) { t.kcal += L[i].kcal; t.p += L[i].p; t.c += L[i].c; t.f += L[i].f; t.fib += L[i].fib || 0; }
   t.kcal = Math.round(t.kcal); t.p = Math.round(t.p); t.c = Math.round(t.c); t.f = Math.round(t.f); t.fib = Math.round(t.fib);
   return t;
@@ -3382,7 +3470,9 @@ function mealTotals(k, meal) {
 }
 function scaleFood(f, grams) {
   var m = grams / 100;
-  return { kcal: f.kcal * m, p: f.p * m, c: f.c * m, f: f.f * m, fib: (f.fib || 0) * m };
+  var o = { kcal: f.kcal * m, p: f.p * m, c: f.c * m, f: f.f * m, fib: (f.fib || 0) * m };
+  var x = scaleNuts(f, m); for (var key in x) o[key] = x[key];
+  return o;
 }
 function addFoodEntry(k, meal, f, grams, servLabel, qty) {
   var m = scaleFood(f, grams);
@@ -3391,6 +3481,7 @@ function addFoodEntry(k, meal, f, grams, servLabel, qty) {
     g: Math.round(grams * 10) / 10, unit: f.unit || 'g', servLabel: servLabel || '', qty: qty || 1,
     kcal: Math.round(m.kcal * 10) / 10, p: r1(m.p), c: r1(m.c), f: r1(m.f), fib: r1(m.fib)
   };
+  setNuts(e, scaleNuts(f, grams / 100));
   if (!S.foodLog[k]) S.foodLog[k] = [];
   S.foodLog[k].push(e);
   if (f.id) {
@@ -3540,6 +3631,7 @@ function offSearch(q, cb, attempt) {
           cat: 'Online', unit: 'g', kcal: r1(kcal), p: r1(n['proteins_100g'] || 0), c: r1(n['carbohydrates_100g'] || 0),
           f: r1(n['fat_100g'] || 0), fib: r1(n['fiber_100g'] || 0), online: true, servings: []
         };
+        setNuts(f, offNuts(n));
         var sq = parseFloat(p.serving_quantity);
         if (sq > 0 && sq < 2000) f.servings.push({ label: '1 serving' + (p.serving_size ? ' (' + p.serving_size + ')' : ''), g: Math.round(sq) });
         f.servings.push({ label: '100 g', g: 100 });
@@ -3557,15 +3649,22 @@ function recipeTotals(rc) {
   rc.items.forEach(function (it) {
     t.kcal += it.kcal; t.p += it.p; t.c += it.c; t.f += it.f; t.fib += it.fib || 0; t.g += it.g;
   });
+  /* an extra nutrient only counts when every ingredient has it */
+  NUTS.forEach(function (n) {
+    if (rc.items.length && rc.items.every(function (it) { return it[n.k] != null; }))
+      t[n.k] = rc.items.reduce(function (a, it) { return a + it[n.k]; }, 0);
+  });
   return t;
 }
 function recipeAsFood(rc) {
   var t = recipeTotals(rc), per = Math.max(1, rc.servings), g = Math.max(1, t.g);
-  return {
+  var rf = {
     id: 'rc-' + rc.id, name: rc.name, brand: 'Recipe', cat: 'Recipe', unit: 'g', recipe: true,
     kcal: r1(t.kcal / g * 100), p: r1(t.p / g * 100), c: r1(t.c / g * 100), f: r1(t.f / g * 100), fib: r1(t.fib / g * 100),
     servings: [{ label: '1 serving', g: Math.round(g / per) }, { label: 'whole recipe', g: Math.round(g) }, { label: '100 g', g: 100 }]
   };
+  setNuts(rf, scaleNuts(t, 100 / g));
+  return rf;
 }
 
 /* ---------- training ---------- */
@@ -4811,6 +4910,7 @@ VIEW.food = function () {
     '<button class="btn sml" data-act="water" data-v="16">+16</button></div></div>' +
     '<div class="macro" style="margin-top:11px"><div class="bar"><i class="bp" style="width:' + r1(clamp(wt / Math.max(1, wg), 0, 1) * 100) + '%"></i></div></div></div>';
 
+  h += nutCard(k, t);
   return h + '</div>';
 };
 
@@ -4992,7 +5092,8 @@ function portionSheet(f, editEntry) {
           '<div><div class="xs mp b">PROTEIN</div><div class="b tnum">' + r1(m.p) + 'g</div></div>' +
           '<div><div class="xs mc b">CARBS</div><div class="b tnum">' + r1(m.c) + 'g</div></div>' +
           '<div><div class="xs mf b">FAT</div><div class="b tnum">' + r1(m.f) + 'g</div></div></div></div>' +
-          '<div class="xs mut2" style="margin-top:8px">' + r1(grams()) + ' ' + (f.unit || 'g') + ' · fiber ' + r1(m.fib) + 'g</div>';
+          '<div class="xs mut2" style="margin-top:8px">' + r1(grams()) + ' ' + (f.unit || 'g') + ' · fiber ' + r1(m.fib) + 'g</div>' +
+          (nutLine(m) ? '<div class="xs mut" style="margin-top:4px">' + nutLine(m) + '</div>' : '');
         var b = $('#pok', el);
         b.textContent = recMode ? 'Add ingredient' : (editEntry ? 'Save changes' : 'Add to ' + $('#pm', el).value);
       }
@@ -5011,6 +5112,7 @@ function portionSheet(f, editEntry) {
           var m = scaleFood(f, g);
           editEntry.meal = meal; editEntry.g = r1(g); editEntry.servLabel = s.label; editEntry.qty = q;
           editEntry.kcal = r1(m.kcal); editEntry.p = r1(m.p); editEntry.c = r1(m.c); editEntry.f = r1(m.f); editEntry.fib = r1(m.fib);
+          NUTS.forEach(function (n) { delete editEntry[n.k]; }); setNuts(editEntry, scaleNuts(f, g / 100));
           save(); closeSheet(); render(); toast('Updated');
         } else {
           addFoodEntry(foodDate, meal, f, g, s.label, q);
@@ -5027,6 +5129,7 @@ ACT.editEntry = function (d) {
   if (!base) {
     var per = 100 / Math.max(0.01, e.g);
     base = { id: null, name: e.name, brand: e.brand, cat: 'Logged', unit: e.unit || 'g', kcal: e.kcal * per, p: e.p * per, c: e.c * per, f: e.f * per, fib: (e.fib || 0) * per, servings: [{ label: e.servLabel || 'as logged', g: e.g / (e.qty || 1) }, { label: '100 ' + (e.unit || 'g'), g: 100 }] };
+    setNuts(base, scaleNuts(e, per));
   }
   portionSheet(base, e);
 };
@@ -5045,7 +5148,7 @@ ACT.quickAdd = function () {
       '<div class="fld"><label>Protein (g)</label><input id="qp" type="number" inputmode="decimal" placeholder="0"></div></div>' +
       '<div class="f2"><div class="fld"><label>Carbs (g)</label><input id="qc" type="number" inputmode="decimal" placeholder="0"></div>' +
       '<div class="fld"><label>Fat (g)</label><input id="qf" type="number" inputmode="decimal" placeholder="0"></div></div>' +
-      '<div class="hint mut2 xs">Leave calories blank and Forge will work them out from the macros.</div>',
+      '<div class="hint mut2 xs" style="margin-bottom:12px">Leave calories blank and Forge will work them out from the macros.</div>' + nutFields('q', null),
     foot: '<button class="btn pri blk" id="qok">Add</button>',
     onOpen: function (el) {
       $('#qok', el).addEventListener('click', function () {
@@ -5053,7 +5156,7 @@ ACT.quickAdd = function () {
         var k = $('#qk', el).value === '' ? Math.round(p * 4 + c * 4 + f * 9) : num($('#qk', el).value);
         var meal = $('#qm', el).value;
         if (!S.foodLog[foodDate]) S.foodLog[foodDate] = [];
-        S.foodLog[foodDate].push({ id: uid(), meal: meal, foodId: null, name: $('#qn', el).value || 'Quick add', brand: '', g: 0, unit: 'g', servLabel: 'quick add', qty: 1, kcal: k, p: p, c: c, f: f, fib: 0 });
+        S.foodLog[foodDate].push(setNuts({ id: uid(), meal: meal, foodId: null, name: $('#qn', el).value || 'Quick add', brand: '', g: 0, unit: 'g', servLabel: 'quick add', qty: 1, kcal: k, p: p, c: c, f: f, fib: 0 }, readNuts(el, 'q', 1)));
         save(); closeAllSheets(); render(); toast('Added to ' + meal);
       });
     }
@@ -5115,7 +5218,7 @@ function foodForm(f, barcode) {
       '<div class="fld"><label>Protein (g)</label><input id="cp" type="number" inputmode="decimal" value="' + (m.p === '' ? '' : r1(m.p)) + '"></div></div>' +
       '<div class="f2"><div class="fld"><label>Carbs (g)</label><input id="cc" type="number" inputmode="decimal" value="' + (m.c === '' ? '' : r1(m.c)) + '"></div>' +
       '<div class="fld"><label>Fat (g)</label><input id="cf" type="number" inputmode="decimal" value="' + (m.f === '' ? '' : r1(m.f)) + '"></div></div>' +
-      '<div class="fld"><label>Fiber (g)</label><input id="cfi" type="number" inputmode="decimal" value="' + (m.fib === '' ? '' : r1(m.fib)) + '"></div>',
+      '<div class="fld"><label>Fiber (g)</label><input id="cfi" type="number" inputmode="decimal" value="' + (m.fib === '' ? '' : r1(m.fib)) + '"></div>' + nutFields('c', f ? scaleNuts(f, sg / 100) : null),
     foot: '<button class="btn pri blk" id="cok">Save food</button>',
     onOpen: function (el) {
       $('#cok', el).addEventListener('click', function () {
@@ -5130,7 +5233,8 @@ function foodForm(f, barcode) {
           c: r1(num($('#cc', el).value) * per), f: r1(num($('#cf', el).value) * per), fib: r1(num($('#cfi', el).value) * per),
           servings: [{ label: $('#cs', el).value.trim() || '1 serving', g: g }, { label: '100 ' + $('#cu', el).value, g: 100 }]
         };
-        if (f) { for (var k in obj) f[k] = obj[k]; }
+        var nv = readNuts(el, 'c', per); setNuts(obj, nv);
+        if (f) { for (var k in obj) f[k] = obj[k]; setNuts(f, nv); }
         else S.customFoods.unshift(obj);
         invalidateFoods(); save(); autoSync(); closeSheet(); render(); toast('Saved');
       });
@@ -5176,7 +5280,7 @@ function restaurantForm(q, f) {
       '<div class="f2"><div class="fld"><label>Carbs (g)</label><input id="rc" type="number" inputmode="decimal" value="' + (f ? r1(f.c) : '') + '" placeholder="0"></div>' +
       '<div class="fld"><label>Fat (g)</label><input id="rf" type="number" inputmode="decimal" value="' + (f ? r1(f.f) : '') + '" placeholder="0"></div></div>' +
       '<div class="fld"><label>Fiber (g) \u00b7 optional</label><input id="rfi" type="number" inputmode="decimal" value="' + (f && f.fib ? r1(f.fib) : '') + '" placeholder="0"></div>' +
-      '<div class="hint mut2 xs">Leave calories blank and Forge works them out from the macros.</div>',
+      '<div class="hint mut2 xs" style="margin-bottom:12px">Leave calories blank and Forge works them out from the macros.</div>' + nutFields('r', f || null),
     foot: '<button class="btn pri blk" id="rok">' + (logIt ? 'Save & add to ' + esc(fState.meal) : 'Save') + '</button>',
     onOpen: function (el) {
       $('#rok', el).addEventListener('click', function () {
@@ -5190,7 +5294,8 @@ function restaurantForm(q, f) {
           unit: 'g', kcal: r1(k), p: r1(p), c: r1(c), f: r1(fa), fib: r1(num($('#rfi', el).value)),
           servings: [{ label: $('#rs', el).value.trim() || '1 item', g: 100 }], added: today()
         };
-        if (f) { for (var key in obj) f[key] = obj[key]; } else S.customFoods.unshift(obj);
+        var nv = readNuts(el, 'r', 1); setNuts(obj, nv);
+        if (f) { for (var key in obj) f[key] = obj[key]; setNuts(f, nv); } else S.customFoods.unshift(obj);
         invalidateFoods();
         if (logIt) {
           addFoodEntry(foodDate, fState.meal, obj, 100, obj.servings[0].label, 1);
@@ -5271,7 +5376,7 @@ function addToRecipeOrLog(f, grams, servLabel, qty) {
     var rid = fState.meal.slice(9), r = S.recipes.filter(function (x) { return x.id === rid; })[0];
     if (r) {
       var m = scaleFood(f, grams);
-      r.items.push({ name: f.name, g: r1(grams), unit: f.unit || 'g', kcal: r1(m.kcal), p: r1(m.p), c: r1(m.c), f: r1(m.f), fib: r1(m.fib) });
+      r.items.push(setNuts({ name: f.name, g: r1(grams), unit: f.unit || 'g', kcal: r1(m.kcal), p: r1(m.p), c: r1(m.c), f: r1(m.f), fib: r1(m.fib) }, scaleNuts(f, grams / 100)));
       save();
     }
     return true;
@@ -6513,6 +6618,7 @@ function lookupBarcode(code) {
         f: r1(n['fat_100g'] || 0), fib: r1(n['fiber_100g'] || 0),
         servings: []
       };
+      setNuts(f, offNuts(n));
       var sq = parseFloat(p.serving_quantity);
       if (sq > 0 && sq < 2000) f.servings.push({ label: '1 serving' + (p.serving_size ? ' (' + p.serving_size + ')' : ''), g: Math.round(sq) });
       f.servings.push({ label: '100 g', g: 100 });
